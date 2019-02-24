@@ -84,43 +84,48 @@ fn main() {
                 Either::A(Either::B(
                     future::ok(Response::new(hyper::Body::empty()))
                 ))
-            } else if !cache.lock().unwrap().contains_key(&destination) {
-                println!("Connection:  {}  -  URL not seen before, caching and returning.", &conn_id);
-                Either::B(Either::A(client.request(req).map({
-                    let cache = Arc::clone(&cache);
-                    move |res: Response<Body>| {
-                        let (parts, body) = res.into_parts();
-                        let content = body.fold(Vec::new(), |mut acc, chunk| {
-                            acc.extend_from_slice(&*chunk);
-                            futures::future::ok::<_, hyper::Error>(acc)
-                        }).wait().unwrap();
-                        let to_cache = CachedResponse {
-                            status: parts.status,
-                            version: parts.version,
-                            headers: parts.headers.clone(),
-                            body: content,
-                        };
-                        cache.lock().unwrap().insert(destination.clone(), to_cache.clone());
-
-                        let mut sendback = Response::builder()
-                            .status(to_cache.status)
-                            .version(to_cache.version)
-                            .body(Body::from(to_cache.body)).unwrap();
-                        *sendback.headers_mut() = to_cache.headers;
-                        sendback
-                    }
-                })))
             } else {
-                println!("Connection:  {}  -  URL seen before, retrieving from cache.", &conn_id);
-                let response = cache.lock().unwrap().get(&destination).unwrap().clone();
-                let mut sendback = Response::builder()
-                    .status(response.status)
-                    .version(response.version)
-                    .body(Body::from(response.body)).unwrap();
-                *sendback.headers_mut() = response.headers;
-                Either::B(Either::B(
-                    future::ok(sendback)
-                ))
+                match cache.lock().unwrap().get(&destination) {
+                    None => {
+                        println!("Connection:  {}  -  URL not seen before, caching and returning.", &conn_id);
+                        Either::B(Either::A(client.request(req).map({
+                            let cache = Arc::clone(&cache);
+                            move |res: Response<Body>| {
+                                let (parts, body) = res.into_parts();
+                                let content = body.fold(Vec::new(), |mut acc, chunk| {
+                                    acc.extend_from_slice(&*chunk);
+                                    futures::future::ok::<_, hyper::Error>(acc)
+                                }).wait().unwrap();
+                                let to_cache = CachedResponse {
+                                    status: parts.status,
+                                    version: parts.version,
+                                    headers: parts.headers.clone(),
+                                    body: content,
+                                };
+                                cache.lock().unwrap().insert(destination.clone(), to_cache.clone());
+
+                                let mut sendback = Response::builder()
+                                    .status(to_cache.status)
+                                    .version(to_cache.version)
+                                    .body(Body::from(to_cache.body)).unwrap();
+                                *sendback.headers_mut() = to_cache.headers;
+                                sendback
+                            }
+                        })))
+                    }
+                    Some(in_cache) => {
+                        println!("Connection:  {}  -  URL seen before, retrieving from cache.", &conn_id);
+                        let response = in_cache.clone();
+                        let mut sendback = Response::builder()
+                            .status(response.status)
+                            .version(response.version)
+                            .body(Body::from(response.body)).unwrap();
+                        *sendback.headers_mut() = response.headers;
+                        Either::B(Either::B(
+                            future::ok(sendback)
+                        ))
+                    }
+                }
             }
         })
     });
