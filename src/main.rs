@@ -2,19 +2,28 @@ use hyper::{Client, Server, Request, Response, Body};
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::rt::{self, Future};
+use hyper::{HeaderMap, Version, StatusCode};
+use hyper::header::HeaderValue;
 use futures::future::{self, Either};
 use tokio::prelude::*;
 use tokio::io::copy;
 use tokio::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
+
+#[derive(Clone)]
+struct CachedResponse {
+    status: StatusCode,
+    version: Version,
+    headers: HeaderMap<HeaderValue>,
+    body: Vec<u8>,
+}
 
 fn main() {
     let in_addr = ([127, 0, 0, 1], 3001).into();
     let client_main = Client::new();
     let blocked_domains = Arc::new(Mutex::new(vec!["www.example.com", "garfeet.me"]));
-    let response_cache: Arc<Mutex<HashMap<String, String, RandomState>>> = Arc::new(Mutex::new(HashMap::new()));
+    let response_cache = Arc::new(Mutex::new(HashMap::new()));
     let current_conn = Arc::new(Mutex::new(0));
 
     let new_service = make_service_fn(move |conn: &AddrStream| {
@@ -75,11 +84,43 @@ fn main() {
                 Either::A(Either::B(
                     future::ok(Response::new(hyper::Body::empty()))
                 ))
+            } else if !cache.lock().unwrap().contains_key(&destination) {
+                println!("Connection:  {}  -  URL not seen before, caching and returning.", &conn_id);
+                Either::B(Either::A(client.request(req).map({
+                    let cache = Arc::clone(&cache);
+                    move |res: Response<Body>| {
+                        let (parts, body) = res.into_parts();
+                        let content = body.fold(Vec::new(), |mut acc, chunk| {
+                            acc.extend_from_slice(&*chunk);
+                            futures::future::ok::<_, hyper::Error>(acc)
+                        }).wait().unwrap();
+                        let to_cache = CachedResponse {
+                            status: parts.status,
+                            version: parts.version,
+                            headers: parts.headers.clone(),
+                            body: content,
+                        };
+                        cache.lock().unwrap().insert(destination.clone(), to_cache.clone());
+
+                        let mut sendback = Response::builder()
+                            .status(to_cache.status)
+                            .version(to_cache.version)
+                            .body(Body::from(to_cache.body)).unwrap();
+                        *sendback.headers_mut() = to_cache.headers;
+                        sendback
+                    }
+                })))
             } else {
-                Either::B(client.request(req).map(|res| {
-                    cache.lock().unwrap().insert(String::from("test"), String::from("ing"));
-                    res
-                }))
+                println!("Connection:  {}  -  URL seen before, retrieving from cache.", &conn_id);
+                let response = cache.lock().unwrap().get(&destination).unwrap().clone();
+                let mut sendback = Response::builder()
+                    .status(response.status)
+                    .version(response.version)
+                    .body(Body::from(response.body)).unwrap();
+                *sendback.headers_mut() = response.headers;
+                Either::B(Either::B(
+                    future::ok(sendback)
+                ))
             }
         })
     });
