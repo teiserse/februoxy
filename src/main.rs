@@ -43,11 +43,13 @@ fn main() {
     let response_cache = Arc::new(Mutex::new(HashMap::new()));
     let current_conn = Arc::new(Mutex::new(0));
     let (send_out, send_in) = mpsc::channel();
-    
+    let blocked_copy = blocked_domains.clone();
+    let closure_copy = blocked_domains.clone();
+
     let new_service = make_service_fn(move |conn: &AddrStream| {
         let _remote_addr = conn.remote_addr();
         let client = client_main.clone();
-        let blocker = Arc::clone(&blocked_domains);
+        let blocker = Arc::clone(&closure_copy);
         let cache = Arc::clone(&response_cache);
         let id_maker = Arc::clone(&current_conn);
         let conn_id: u64 = id_maker.lock().unwrap().clone();
@@ -246,9 +248,7 @@ fn main() {
 
     let mut stdin = async_stdin().bytes();
 
-//    let blocked_list = Arc::clone(&blocked_domains);
-
-    thread::spawn( move || {
+    thread::spawn(move || {
         let mut stdout = stdout();
         if termion::is_tty(&stdout) {
             let mut stdout = stdout.lock().into_raw_mode().unwrap();
@@ -256,7 +256,7 @@ fn main() {
             let mut current_given = Vec::new();
             let mut messages = Vec::new();
             let mut prev_len = 0;
-            
+
             write!(
                 stdout,
                 "{}{}{}",
@@ -325,48 +325,56 @@ fn main() {
                 .unwrap();
             }
 
-                write!(
-                    stdout,
-                    "{} C-ID {} Message{}{}{}{}{}FEBRUOXY - For CS3031",
-                    termion::cursor::Goto(2,2),
-                    BOX_VERTICAL,
-                    termion::cursor::Goto(8,1),
-                    BOX_HORZ_DOWN,
-                    termion::cursor::Goto(8,height),
-                    BOX_HORZ_UP,
-                    termion::cursor::Goto(boundary + 1,2)
-                ).unwrap();
+            write!(
+                stdout,
+                "{} C-ID {} Message{}{}{}{}{}FEBRUOXY - For CS3031",
+                termion::cursor::Goto(2, 2),
+                BOX_VERTICAL,
+                termion::cursor::Goto(8, 1),
+                BOX_HORZ_DOWN,
+                termion::cursor::Goto(8, height),
+                BOX_HORZ_UP,
+                termion::cursor::Goto(boundary + 1, 2)
+            )
+            .unwrap();
 
-                write!(
-                    stdout,
-                    "{}{}{}{}{}{}{}{}",
-                    termion::cursor::Goto(1,3),
-                    BOX_VERT_RIGHT,
-                    BOX_HORIZONTAL.to_string().repeat(6),
-                    BOX_VERT_HORZ,
-                    BOX_HORIZONTAL.to_string().repeat((boundary - 9) as usize),
-                    BOX_VERT_HORZ,
-                    BOX_HORIZONTAL.to_string().repeat((width - boundary - 1) as usize),
-                    BOX_VERT_LEFT
-                ).unwrap();
+            write!(
+                stdout,
+                "{}{}{}{}{}{}{}{}",
+                termion::cursor::Goto(1, 3),
+                BOX_VERT_RIGHT,
+                BOX_HORIZONTAL.to_string().repeat(6),
+                BOX_VERT_HORZ,
+                BOX_HORIZONTAL.to_string().repeat((boundary - 9) as usize),
+                BOX_VERT_HORZ,
+                BOX_HORIZONTAL
+                    .to_string()
+                    .repeat((width - boundary - 1) as usize),
+                BOX_VERT_LEFT
+            )
+            .unwrap();
 
+            write!(
+                stdout,
+                "{}Blocking List:",
+                termion::cursor::Goto(boundary + 2, 4)
+            )
+            .unwrap();
+
+            {
+                let blocks_attempt = blocked_copy.lock().unwrap();
                 write!(
                     stdout,
-                    "{}Blocking List:",
-                    termion::cursor::Goto(boundary + 2, 4)
-                ).unwrap();
-/*
-                write!(
-                    stdout,
-                    "{}{:2}: {}{}{:2}:{}",
+                    "{}{:2}: {}{}{:2}: {}",
                     termion::cursor::Goto(boundary + 1, 5),
                     0,
-                    blocked_list.lock().unwrap()[0],
+                    blocks_attempt[0],
                     termion::cursor::Goto(boundary + 1, 6),
                     1,
-                    blocked_list.lock().unwrap()[1]
-                ).unwrap();
-*/
+                    blocks_attempt[1]
+                )
+                .unwrap();
+            }
             stdout.flush().unwrap();
 
             loop {
@@ -416,7 +424,7 @@ fn main() {
                 if { current_len != prev_len } {
                     let mut line_number = 4;
                     while line_number < height && (line_number as usize) < current_len {
-                        let (id, message) = if current_len < ((height+1) as usize) {
+                        let (id, message) = if current_len < ((height + 1) as usize) {
                             &messages[(line_number - 4) as usize]
                         } else {
                             &messages[(current_len - 1) - (((height) - line_number - 1) as usize)]
