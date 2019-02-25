@@ -39,7 +39,10 @@ struct CachedResponse {
 fn main() {
     let in_addr = ([127, 0, 0, 1], 3001).into();
     let client_main = Client::new();
-    let blocked_domains = Arc::new(Mutex::new(vec!["www.example.com", "garfeet.me"]));
+    let blocked_domains = Arc::new(Mutex::new(vec![
+        String::from("www.example.com"),
+        String::from("garfeet.me"),
+    ]));
     let response_cache = Arc::new(Mutex::new(HashMap::new()));
     let current_conn = Arc::new(Mutex::new(0));
     let (send_out, send_in) = mpsc::channel();
@@ -69,7 +72,7 @@ fn main() {
             let mut is_blocked = false;
 
             for iter in 0..block_len {
-                if destination.contains(blocker.lock().unwrap()[iter]) {
+                if destination.contains(&blocker.lock().unwrap()[iter]) {
                     is_blocked = true;
                 }
             }
@@ -256,6 +259,7 @@ fn main() {
             let mut current_given = Vec::new();
             let mut messages = Vec::new();
             let mut prev_len = 0;
+            let blocked_copy = blocked_copy.clone();
 
             write!(
                 stdout,
@@ -394,6 +398,40 @@ fn main() {
                         }
                         Ok(127) => {
                             current_given.pop();
+                        }
+                        Ok(13) => {
+                            let mut blocks = blocked_copy.lock().unwrap();
+                            let input = String::from(std::str::from_utf8(&current_given).unwrap());
+                            match (&input).parse::<usize>() {
+                                Ok(index) => {
+                                    if index < blocks.len() {
+                                        blocks.remove(index);
+                                    }
+                                }
+                                Err(_) => {
+                                    blocks.push(input);
+                                }
+                            }
+                            current_given.clear();
+                            for d_block in 0..blocks.len() {
+                                write!(
+                                    stdout,
+                                    "{}{}{}{:2}: {}",
+                                    termion::cursor::Goto(boundary + 1, 5 + (d_block as u16)),
+                                    " ".repeat((width - boundary - 1) as usize),
+                                    termion::cursor::Goto(boundary + 1, 5 + (d_block as u16)),
+                                    d_block,
+                                    blocks[d_block]
+                                )
+                                .unwrap();
+                            }
+                            write!(
+                                stdout,
+                                "{}{}",
+                                termion::cursor::Goto(boundary + 1, 5 + (blocks.len() as u16)),
+                                " ".repeat((width - boundary - 1) as usize),
+                            )
+                            .unwrap();
                         }
                         Ok(num) => {
                             current_given.push(num);
